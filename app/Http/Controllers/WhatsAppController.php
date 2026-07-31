@@ -2,28 +2,18 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\ProcessWhatsAppWebhookJob;
 use Illuminate\Http\Request;
-use App\Services\UaldoManagerService;
-use App\Services\WhatsAppService;
 use Illuminate\Support\Facades\Log;
 
 class WhatsAppController extends Controller
 {
-    protected UaldoManagerService $ualdoService;
-    protected WhatsAppService $whatsapp;
-
-    public function __construct(UaldoManagerService $ualdoService, WhatsAppService $whatsapp)
-    {
-        $this->ualdoService = $ualdoService;
-        $this->whatsapp = $whatsapp;
-    }
-
     /**
      * Webhook verification for WhatsApp Meta Cloud API.
      */
     public function verifyWebhook(Request $request)
     {
-        $verifyToken = env('WHATSAPP_VERIFY_TOKEN', 'ualdo_business_token');
+        $verifyToken = config('services.whatsapp.verify_token', 'ualdo_business_token');
 
         $mode = $request->query('hub_mode');
         $token = $request->query('hub_verify_token');
@@ -41,44 +31,41 @@ class WhatsAppController extends Controller
     }
 
     /**
-     * Handle incoming WhatsApp messages.
+     * Handle incoming WhatsApp webhook messages (Asynchronous Queue Dispatch + Signature Check).
      */
     public function handleWebhook(Request $request)
     {
+        $appSecret = config('services.whatsapp.app_secret');
+
+        // Validar firma HMAC SHA256 si la appSecret está configurada
+        if (!empty($appSecret)) {
+            $signatureHeader = $request->header('X-Hub-Signature-256');
+            if (!$signatureHeader || !$this->isValidSignature($request->getContent(), $signatureHeader, $appSecret)) {
+                Log::warning('Firma X-Hub-Signature-256 de WhatsApp inválida o no provista.');
+                return response()->json(['error' => 'Invalid signature'], 401);
+            }
+        }
+
         $payload = $request->all();
 
         if (isset($payload['object']) && $payload['object'] === 'whatsapp_business_account') {
-            foreach ($payload['entry'] as $entry) {
-                foreach ($entry['changes'] as $change) {
-                    if (isset($change['value']['messages'])) {
-                        $messageData = $change['value']['messages'][0];
-                        $contactsData = $change['value']['contacts'][0] ?? [];
+            // Despachar a la cola para no bloquear la respuesta HTTP (Responde a Meta en <50ms)
+            ProcessWhatsAppWebhookJob::dispatch($payload);
 
-                        $senderPhone = $messageData['from'] ?? 'unknown';
-                        $waId = $messageData['id'] ?? null;
-                        $messageText = $messageData['text']['body'] ?? '';
-
-                        // Extraer el nombre si está presente en la carga útil de WhatsApp
-                        $profileName = $contactsData['profile']['name'] ?? null;
-
-                        if (!empty($messageText)) {
-                            Log::info("WhatsApp Incoming Message from {$senderPhone} ({$profileName}): {$messageText}");
-
-                            // Procesar mediante UaldoManagerService (IA + Tools)
-                            $reply = $this->ualdoService->processIncomingMessage($senderPhone, $messageText, 'whatsapp', $waId);
-
-                            // Enviar la respuesta directamente a WhatsApp
-                            if (!empty($reply)) {
-                                $this->whatsapp->sendText($senderPhone, $reply);
-                            }
-                        }
-                    }
-                }
-            }
             return response('EVENT_RECEIVED', 200);
         }
 
         return response()->json(['status' => 'not_found'], 404);
     }
-}
 
+    /**
+     * Verify Meta HMAC SHA256 signature.
+     */
+    protected function isValidSignature(string $payload, string $signatureHeader, string $appSecret): bool
+    {
+        $expectedHash = hash_hmac('sha256', $payload, $appSecret);
+        $providedHash = str_replace('sha256=', '', $signatureHeader);
+
+        return hash_equals($expectedHash, $providedHash);
+    }
+}

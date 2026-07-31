@@ -13,8 +13,8 @@ class WhatsAppService
 
     public function __construct()
     {
-        $this->phoneId = env('WHATSAPP_PHONE_ID', '');
-        $this->accessToken = env('WHATSAPP_ACCESS_TOKEN', '');
+        $this->phoneId = config('services.whatsapp.phone_id', '');
+        $this->accessToken = config('services.whatsapp.access_token', '');
     }
 
     /**

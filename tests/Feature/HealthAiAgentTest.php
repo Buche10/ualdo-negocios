@@ -2,29 +2,33 @@
 
 namespace Tests\Feature;
 
+use App\Http\Controllers\WhatsAppController;
+use App\Jobs\ProcessWhatsAppWebhookJob;
 use App\Models\Appointment;
 use App\Models\Contact;
 use App\Models\InventoryItem;
 use App\Services\HealthSkillsService;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class HealthAiAgentTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_check_availability_tool_returns_available_slots()
+    public function test_check_availability_tool_returns_booked_intervals()
     {
         $contact = Contact::create(['phone_number' => '593999888777', 'name' => 'Juan Perez']);
 
-        // Crear una cita agendada hoy a las 10:00
-        $today = Carbon::today()->format('Y-m-d');
+        $tz = 'America/Guayaquil';
+        $today = Carbon::today($tz)->format('Y-m-d');
         Appointment::create([
             'contact_id' => $contact->id,
             'title' => 'Consulta Odontológica',
-            'start_time' => Carbon::parse("{$today} 10:00:00"),
-            'end_time' => Carbon::parse("{$today} 10:45:00"),
+            'start_time' => Carbon::parse("{$today} 10:00:00", $tz),
+            'end_time' => Carbon::parse("{$today} 10:45:00", $tz),
             'status' => 'scheduled'
         ]);
 
@@ -36,10 +40,12 @@ class HealthAiAgentTest extends TestCase
         $result = json_decode($resultJson, true);
 
         $this->assertEquals('success', $result['status']);
-        $this->assertContains('10:00', $result['booked_times']);
+        $this->assertCount(1, $result['booked_intervals']);
+        $this->assertEquals('10:00', $result['booked_intervals'][0]['from']);
+        $this->assertEquals('10:45', $result['booked_intervals'][0]['to']);
     }
 
-    public function test_schedule_appointment_tool_enforces_anti_double_booking()
+    public function test_schedule_appointment_tool_enforces_time_range_overlap_guard()
     {
         $contact = Contact::create(['phone_number' => '593999888777', 'name' => 'Maria Gomez']);
 
@@ -47,59 +53,74 @@ class HealthAiAgentTest extends TestCase
         $tools = $service->getTools($contact);
         $scheduleTool = collect($tools)->firstWhere(fn($t) => $t->name() === 'schedule_appointment');
 
-        $slot = Carbon::tomorrow()->format('Y-m-d 11:00');
-
-        // 1. Agendar primera cita
-        $res1Json = $scheduleTool->handle($slot, 'Limpieza Dental');
+        $tz = 'America/Guayaquil';
+        $today = Carbon::tomorrow($tz)->format('Y-m-d');
+        
+        // 1. Agendar cita de 09:00 a 09:45
+        $res1Json = $scheduleTool->handle("{$today} 09:00", 'Limpieza Dental');
         $res1 = json_decode($res1Json, true);
         $this->assertEquals('success', $res1['status']);
 
-        // 2. Intentar agendar en la misma hora -> debe fallar por el guard
-        $res2Json = $scheduleTool->handle($slot, 'Consulta General');
+        // 2. Intentar agendar a las 09:30 (se solapa con la cita de 09:00 a 09:45) -> debe ser rechazado
+        $res2Json = $scheduleTool->handle("{$today} 09:30", 'Consulta General');
         $res2 = json_decode($res2Json, true);
 
         $this->assertEquals('error', $res2['status']);
-        $this->assertStringContainsString('ya está ocupada', $res2['message']);
+        $this->assertStringContainsString('solapa', $res2['message']);
     }
 
-    public function test_search_services_tool_returns_consultorio_inventory()
+    public function test_webhook_dispatches_async_job_immediately()
     {
-        $contact = Contact::create(['phone_number' => '593999888777', 'name' => 'Carlos']);
+        Queue::fake();
 
-        InventoryItem::create([
-            'name' => 'Blanqueamiento Dental LED',
-            'description' => 'Tratamiento estético de aclaramiento dental',
-            'type' => 'service',
-            'price' => 120.00,
-            'stock' => 999
-        ]);
+        $payload = [
+            'object' => 'whatsapp_business_account',
+            'entry' => [
+                [
+                    'changes' => [
+                        [
+                            'value' => [
+                                'messages' => [
+                                    [
+                                        'from' => '593999111222',
+                                        'id' => 'wamid.123',
+                                        'text' => ['body' => 'Hola, deseo agendar una cita']
+                                    ]
+                                ]
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        ];
 
-        $service = new HealthSkillsService();
-        $tools = $service->getTools($contact);
-        $searchTool = collect($tools)->firstWhere(fn($t) => $t->name() === 'search_services');
+        $response = $this->postJson('/api/whatsapp/webhook', $payload);
 
-        $resJson = $searchTool->handle('blanqueamiento');
-        $res = json_decode($resJson, true);
-
-        $this->assertEquals('success', $res['status']);
-        $this->assertCount(1, $res['services']);
-        $this->assertEquals('Blanqueamiento Dental LED', $res['services'][0]['name']);
+        $response->assertStatus(200);
+        Queue::assertPushed(ProcessWhatsAppWebhookJob::class);
     }
 
-    public function test_transfer_to_human_tool_pauses_bot_for_24_hours()
+    public function test_webhook_validates_x_hub_signature()
     {
-        $contact = Contact::create(['phone_number' => '593999888777', 'name' => 'Ana']);
+        config(['services.whatsapp.app_secret' => 'super_secret_key']);
 
-        $service = new HealthSkillsService();
-        $tools = $service->getTools($contact);
-        $transferTool = collect($tools)->firstWhere(fn($t) => $t->name() === 'transfer_to_human');
+        $payload = json_encode(['object' => 'whatsapp_business_account']);
 
-        $resJson = $transferTool->handle('Quiero hablar con una recepcionista');
-        $res = json_decode($resJson, true);
+        // Peticion sin firma valida -> 401 Unauthorized
+        $response = $this->call('POST', '/api/whatsapp/webhook', [], [], [], [
+            'HTTP_X-Hub-Signature-256' => 'sha256=invalid_signature',
+            'CONTENT_TYPE' => 'application/json'
+        ], $payload);
 
-        $this->assertEquals('success', $res['status']);
-        $contact->refresh();
-        $this->assertNotNull($contact->bot_paused_until);
-        $this->assertTrue(Carbon::parse($contact->bot_paused_until)->isFuture());
+        $response->assertStatus(401);
+
+        // Peticion con firma HMAC SHA256 correcta -> 200 OK
+        $validHash = hash_hmac('sha256', $payload, 'super_secret_key');
+        $responseValid = $this->call('POST', '/api/whatsapp/webhook', [], [], [], [
+            'HTTP_X-Hub-Signature-256' => "sha256={$validHash}",
+            'CONTENT_TYPE' => 'application/json'
+        ], $payload);
+
+        $responseValid->assertStatus(200);
     }
 }

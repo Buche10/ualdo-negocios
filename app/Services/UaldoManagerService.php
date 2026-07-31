@@ -5,7 +5,6 @@ namespace App\Services;
 use App\Models\Contact;
 use App\Models\Message;
 use App\Models\InventoryItem;
-use App\Models\Appointment;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
 use Prism\Prism\Prism;
@@ -28,6 +27,8 @@ class UaldoManagerService
      */
     public function processIncomingMessage(string $senderPhone, string $messageText, string $channel = 'whatsapp', ?string $waId = null): string
     {
+        $tz = config('app.timezone', 'America/Guayaquil');
+
         // 1. Obtener o crear Contacto / Paciente
         $contact = Contact::firstOrCreate(
             ['phone_number' => $senderPhone],
@@ -43,7 +44,7 @@ class UaldoManagerService
         ]);
 
         // 3. Verificar si el bot está pausado para este paciente (Handoff humano)
-        if ($contact->bot_paused_until && Carbon::parse($contact->bot_paused_until)->isFuture()) {
+        if ($contact->bot_paused_until && Carbon::parse($contact->bot_paused_until, $tz)->isFuture()) {
             Log::info("Bot pausado para paciente {$senderPhone} hasta {$contact->bot_paused_until}. Mensaje no procesado por IA.");
             return "";
         }
@@ -75,7 +76,8 @@ class UaldoManagerService
      */
     protected function generateAiResponse(Contact $contact, string $latestUserMessage): string
     {
-        $now = Carbon::now()->format('Y-m-d H:i (l)');
+        $tz = config('app.timezone', 'America/Guayaquil');
+        $now = Carbon::now($tz)->format('Y-m-d H:i (l)');
         $servicesCount = InventoryItem::count();
 
         // 1. Historial reciente (hasta 20 mensajes)
@@ -93,26 +95,29 @@ class UaldoManagerService
             }
         }
 
-        // 2. Definir System Prompt para el vertical de Salud
+        // 2. System Prompt especializado para Consultorios de Salud con encuadre LOPDP
         $systemPrompt = <<<PROMPT
-Eres Ualdo, la recepcionista médica virtual experta de un consultorio de salud (atención médica, odontológica y estética). Hoy es {$now}.
+Eres Ualdo, la recepcionista médica virtual experta del consultorio de salud (atención médica, odontológica y estética). Zona horaria actual: America/Guayaquil (Guayaquil/Quito, Ecuador). Hoy es {$now}.
 
 TU OBJETIVO PRINCIPAL:
-Atender al paciente con empatía, profesionalismo y calidez por WhatsApp. Responder dudas sobre servicios, verificar disponibilidad y agendar o modificar citas de forma precisa.
+Atender al paciente con empatía, claridad y eficiencia por WhatsApp. Responder sobre especialidades y tarifas, verificar disponibilidad de la agenda médica y confirmar citas sin solapamientos.
 
-CONEXIÓN Y HERRAMIENTAS DISPONIBLES:
-- Dispones de {$servicesCount} servicios registrados en la base de datos del consultorio.
-- Tienes acceso a herramientas (check_availability, schedule_appointment, search_services, transfer_to_human).
-- REGLA DE ORO: SIEMPRE usa la herramienta 'check_availability' antes de ofrecer horarios de cita al paciente.
-- REGLA DE ORO 2: NUNCA inventes precios ni servicios. Usa 'search_services' si te preguntan por tarifas o tratamientos.
-- SIEMPRE pide el nombre completo y motivo si vas a agendar la cita.
-- Mantén respuestas concisas, estructuradas y listas para WhatsApp (sin Markdown redundante ni encabezados molestos).
+PROTECCIÓN DE DATOS (CUMPLIMIENTO LOPDP - ECUADOR):
+- Trata toda información médica y personal bajo estricta confidencialidad médica conforme a la Ley Orgánica de Protección de Datos Personales (LOPDP).
+- Si es el primer mensaje de interacción para agendar, incluye sutilmente la nota de consentimiento de datos de salud al confirmar los datos del paciente (ej: "Al confirmar tu cita, aceptas el tratamiento confidencial de tus datos para tu atención médica conforme a la LOPDP").
+
+REGLAS DE OPERACIÓN CON HERRAMIENTAS:
+1. SIEMPRE usa 'check_availability' antes de ofrecer horarios de cita al paciente.
+2. NUNCA inventes tarifas ni servicios. Usa 'search_services' si te preguntan por costos o disponibilidad de tratamientos.
+3. SIEMPRE solicita el nombre completo y motivo del paciente antes de ejecutar 'schedule_appointment'.
+4. Usa 'transfer_to_human' si el paciente expresa una emergencia médica grave, una molestia severa o solicita hablar con un profesional humano.
+5. Genera respuestas limpias, estructuradas y con lenguaje adecuado para WhatsApp.
 PROMPT;
 
         // 3. Herramientas configuradas
         $tools = $this->healthSkills->getTools($contact);
 
-        // 4. Invocación de Prism con DeepSeek y fallback a OpenAI (Spike Resiliencia)
+        // 4. Invocación de Prism con DeepSeek y fallback a OpenAI
         return $this->executePrismCall($systemPrompt, $prismMessages, $tools);
     }
 
@@ -124,7 +129,6 @@ PROMPT;
         $deepseekKey = config('prism.providers.deepseek.api_key');
         $openaiKey = config('prism.providers.openai.api_key');
 
-        // Intentar primero con DeepSeek si la API Key está presente
         if (!empty($deepseekKey)) {
             try {
                 Log::info("Invocando Prism con proveedor DeepSeek...");
@@ -138,11 +142,10 @@ PROMPT;
 
                 return $response->text;
             } catch (Throwable $e) {
-                Log::warning("DeepSeek tool-call falló o no está disponible: " . $e->getMessage() . ". Intentando fallback con OpenAI...");
+                Log::warning("DeepSeek tool-call falló: " . $e->getMessage() . ". Intentando fallback con OpenAI...");
             }
         }
 
-        // Fallback a OpenAI (gpt-4o-mini)
         if (!empty($openaiKey)) {
             Log::info("Invocando Prism con proveedor OpenAI (gpt-4o-mini)...");
             $response = Prism::text()
@@ -156,6 +159,6 @@ PROMPT;
             return $response->text;
         }
 
-        throw new \RuntimeException("No hay API Keys configuradas ni para DeepSeek ni para OpenAI en .env / config.");
+        throw new \RuntimeException("No hay API Keys configuradas ni para DeepSeek ni para OpenAI en config.");
     }
 }

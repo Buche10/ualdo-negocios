@@ -35,4 +35,16 @@ return [
         ],
     ],
 
+    'whatsapp' => [
+        'phone_id' => env('WHATSAPP_PHONE_ID', ''),
+        'access_token' => env('WHATSAPP_ACCESS_TOKEN', ''),
+        'verify_token' => env('WHATSAPP_VERIFY_TOKEN', 'ualdo_business_token'),
+        'app_secret' => env('WHATSAPP_APP_SECRET', ''),
+    ],
+
+    'google' => [
+        'calendar_id' => env('GOOGLE_CALENDAR_ID', 'primary'),
+        'service_account_json' => env('GOOGLE_SERVICE_ACCOUNT_JSON', ''),
+    ],
+
 ];
