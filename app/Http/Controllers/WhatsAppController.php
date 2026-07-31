@@ -4,18 +4,22 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Services\UaldoManagerService;
+use App\Services\WhatsAppService;
+use Illuminate\Support\Facades\Log;
 
 class WhatsAppController extends Controller
 {
     protected UaldoManagerService $ualdoService;
+    protected WhatsAppService $whatsapp;
 
-    public function __construct(UaldoManagerService $ualdoService)
+    public function __construct(UaldoManagerService $ualdoService, WhatsAppService $whatsapp)
     {
         $this->ualdoService = $ualdoService;
+        $this->whatsapp = $whatsapp;
     }
 
     /**
-     * Webhook verification for WhatsApp API.
+     * Webhook verification for WhatsApp Meta Cloud API.
      */
     public function verifyWebhook(Request $request)
     {
@@ -27,6 +31,7 @@ class WhatsAppController extends Controller
 
         if ($mode && $token) {
             if ($mode === 'subscribe' && $token === $verifyToken) {
+                Log::info('WhatsApp Webhook Verified');
                 return response($challenge, 200);
             }
             return response()->json(['error' => 'Forbidden'], 403);
@@ -42,25 +47,38 @@ class WhatsAppController extends Controller
     {
         $payload = $request->all();
 
-        // Very basic parsing of WhatsApp Cloud API payload
-        if (isset($payload['entry'][0]['changes'][0]['value']['messages'][0])) {
-            $messageData = $payload['entry'][0]['changes'][0]['value']['messages'][0];
-            $senderPhone = $messageData['from'] ?? 'unknown';
-            
-            $messageText = '';
-            if (isset($messageData['text']['body'])) {
-                $messageText = $messageData['text']['body'];
-            }
+        if (isset($payload['object']) && $payload['object'] === 'whatsapp_business_account') {
+            foreach ($payload['entry'] as $entry) {
+                foreach ($entry['changes'] as $change) {
+                    if (isset($change['value']['messages'])) {
+                        $messageData = $change['value']['messages'][0];
+                        $contactsData = $change['value']['contacts'][0] ?? [];
 
-            if (!empty($messageText)) {
-                // Pass it to Ualdo Manager
-                $reply = $this->ualdoService->processIncomingMessage($senderPhone, $messageText, 'whatsapp');
+                        $senderPhone = $messageData['from'] ?? 'unknown';
+                        $waId = $messageData['id'] ?? null;
+                        $messageText = $messageData['text']['body'] ?? '';
 
-                // Here we would use Http facade to send the $reply back to the WhatsApp API
-                // Http::withToken(env('WHATSAPP_TOKEN'))->post('...', ['to' => $senderPhone, 'text' => ['body' => $reply]]);
+                        // Extraer el nombre si está presente en la carga útil de WhatsApp
+                        $profileName = $contactsData['profile']['name'] ?? null;
+
+                        if (!empty($messageText)) {
+                            Log::info("WhatsApp Incoming Message from {$senderPhone} ({$profileName}): {$messageText}");
+
+                            // Procesar mediante UaldoManagerService (IA + Tools)
+                            $reply = $this->ualdoService->processIncomingMessage($senderPhone, $messageText, 'whatsapp', $waId);
+
+                            // Enviar la respuesta directamente a WhatsApp
+                            if (!empty($reply)) {
+                                $this->whatsapp->sendText($senderPhone, $reply);
+                            }
+                        }
+                    }
+                }
             }
+            return response('EVENT_RECEIVED', 200);
         }
 
-        return response()->json(['status' => 'ok']);
+        return response()->json(['status' => 'not_found'], 404);
     }
 }
+

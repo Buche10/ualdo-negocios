@@ -6,24 +6,20 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-class Appointment extends Model
+class Message extends Model
 {
     use HasFactory;
 
     protected $fillable = [
         'contact_id',
-        'title',
-        'description',
-        'start_time',
-        'end_time',
-        'status',
-        'customer_info',
+        'role',
+        'content',
+        'wa_id',
+        'metadata',
     ];
 
     protected $casts = [
-        'start_time' => 'datetime',
-        'end_time' => 'datetime',
-        'customer_info' => 'array',
+        'metadata' => 'array',
     ];
 
     public function contact(): BelongsTo
@@ -31,4 +27,3 @@ class Appointment extends Model
         return $this->belongsTo(Contact::class);
     }
 }
-
