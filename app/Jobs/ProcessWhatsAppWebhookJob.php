@@ -35,7 +35,7 @@ class ProcessWhatsAppWebhookJob implements ShouldQueue
      */
     public function handle(UaldoManagerService $ualdoService, WhatsAppService $whatsapp): void
     {
-        if (!isset($this->payload['object']) || $this->payload['object'] !== 'whatsapp_business_account') {
+        if (!isset($this->payload['object']) || $this->payload['object'] !== 'whatsapp_business_account' || !isset($this->payload['entry']) || !is_array($this->payload['entry'])) {
             return;
         }
 
