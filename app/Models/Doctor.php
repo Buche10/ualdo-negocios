@@ -5,27 +5,27 @@ namespace App\Models;
 use App\Traits\BelongsToBusiness;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-class Message extends Model
+class Doctor extends Model
 {
     use HasFactory, BelongsToBusiness;
 
     protected $fillable = [
         'business_id',
-        'contact_id',
-        'role',
-        'content',
-        'wa_id',
-        'metadata',
+        'name',
+        'specialty',
+        'email',
+        'phone',
+        'google_calendar_id',
+        'is_active',
     ];
 
     protected $casts = [
-        'metadata' => 'array',
+        'is_active' => 'boolean',
     ];
 
-    public function contact(): BelongsTo
+    public function appointments()
     {
-        return $this->belongsTo(Contact::class);
+        return $this->hasMany(Appointment::class);
     }
 }

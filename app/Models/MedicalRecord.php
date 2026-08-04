@@ -7,34 +7,33 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-class Appointment extends Model
+class MedicalRecord extends Model
 {
     use HasFactory, BelongsToBusiness;
 
     protected $fillable = [
         'business_id',
         'contact_id',
+        'appointment_id',
         'doctor_id',
-        'title',
-        'description',
-        'start_time',
-        'end_time',
-        'status',
-        'google_event_id',
-        'reminder_sent_at',
-        'customer_info',
+        'diagnosis',
+        'treatment_plan',
+        'notes',
+        'attachments',
     ];
 
     protected $casts = [
-        'start_time' => 'datetime',
-        'end_time' => 'datetime',
-        'reminder_sent_at' => 'datetime',
-        'customer_info' => 'array',
+        'attachments' => 'array',
     ];
 
     public function contact(): BelongsTo
     {
         return $this->belongsTo(Contact::class);
+    }
+
+    public function appointment(): BelongsTo
+    {
+        return $this->belongsTo(Appointment::class);
     }
 
     public function doctor(): BelongsTo

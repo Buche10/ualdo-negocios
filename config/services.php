@@ -47,4 +47,9 @@ return [
         'service_account_json' => env('GOOGLE_SERVICE_ACCOUNT_JSON', ''),
     ],
 
+    'telegram' => [
+        'bot_token' => env('TELEGRAM_BOT_TOKEN', ''),
+        'chat_id' => env('TELEGRAM_CHAT_ID', ''),
+    ],
+
 ];

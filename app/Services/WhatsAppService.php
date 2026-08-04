@@ -8,7 +8,9 @@ use Illuminate\Support\Facades\Log;
 class WhatsAppService
 {
     protected string $phoneId;
+
     protected string $accessToken;
+
     protected string $version = 'v20.0';
 
     public function __construct()
@@ -23,7 +25,8 @@ class WhatsAppService
     public function sendText(string $to, string $text)
     {
         if (empty($this->phoneId) || empty($this->accessToken)) {
-            Log::warning("WHATSAPP_PHONE_ID o WHATSAPP_ACCESS_TOKEN no están configurados en el archivo .env.");
+            Log::warning('WHATSAPP_PHONE_ID o WHATSAPP_ACCESS_TOKEN no están configurados en el archivo .env.');
+
             return null;
         }
 
@@ -35,16 +38,16 @@ class WhatsAppService
             'to' => $to,
             'type' => 'text',
             'text' => [
-                'body' => $text
-            ]
+                'body' => $text,
+            ],
         ];
 
         $response = Http::withToken($this->accessToken)->post($url, $payload);
 
         if ($response->failed()) {
-            Log::error("WhatsApp Cloud API Send Error", [
+            Log::error('WhatsApp Cloud API Send Error', [
                 'to' => $to,
-                'response' => $response->json()
+                'response' => $response->json(),
             ]);
         } else {
             Log::info("Mensaje enviado exitosamente a WhatsApp ({$to}): {$text}");
