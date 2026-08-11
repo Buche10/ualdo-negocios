@@ -1,0 +1,39 @@
+# Local production-image smoke test: web + worker + postgres + redis.
+# Build once, share the image between web and worker (mirrors the Coolify pattern).
+services:
+  web:
+    build: .
+    image: ualdo-negocios:local
+    ports:
+      - "8080:80"
+    env_file: .env.docker
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  worker:
+    image: ualdo-negocios:local
+    command: php artisan queue:work --tries=3 --timeout=90
+    env_file: .env.docker
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: ualdo
+      POSTGRES_USER: ualdo
+      POSTGRES_PASSWORD: secret
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+
+  redis:
+    image: redis:7-alpine
+
+volumes:
+  pgdata:

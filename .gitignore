@@ -22,3 +22,6 @@
 Homestead.json
 Homestead.yaml
 Thumbs.db
+
+# Local docker smoke-test env (no commitear: contiene APP_KEY local)
+.env.docker
