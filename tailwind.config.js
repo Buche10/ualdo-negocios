@@ -12,8 +12,16 @@ export default {
 
     theme: {
         extend: {
+            colors: {
+                ualdo: {
+                    turquesa: '#62c9c8',  // primario / acento (la "U")
+                    teal:     '#2d9ba1',  // secundario
+                    profundo: '#00737f',  // primario oscuro
+                    tinta:    '#1d1d1b',  // texto / fondos
+                },
+            },
             fontFamily: {
-                sans: ['Figtree', ...defaultTheme.fontFamily.sans],
+                sans: ['Poppins', ...defaultTheme.fontFamily.sans],
             },
         },
     },

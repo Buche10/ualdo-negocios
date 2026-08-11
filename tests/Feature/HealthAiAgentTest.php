@@ -4,10 +4,15 @@ namespace Tests\Feature;
 
 use App\Jobs\ProcessWhatsAppWebhookJob;
 use App\Models\Appointment;
+use App\Models\Business;
 use App\Models\Contact;
+use App\Models\Doctor;
 use App\Models\Message;
+use App\Services\BusinessContext;
+use App\Services\GoogleCalendarService;
 use App\Services\HealthSkillsService;
 use App\Services\UaldoManagerService;
+use App\Services\WhatsAppService;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -22,14 +27,14 @@ class HealthAiAgentTest extends TestCase
     {
         parent::setUp();
 
-        $business = \App\Models\Business::first() ?? \App\Models\Business::create([
+        $business = Business::first() ?? Business::create([
             'name' => 'Consultorio Salud Principal',
             'slug' => 'consultorio-salud-principal',
             'vertical' => 'health',
             'whatsapp_phone_number_id' => 'default_phone_id',
         ]);
 
-        \App\Services\BusinessContext::set($business);
+        BusinessContext::set($business);
     }
 
     public function test_check_availability_tool_returns_booked_intervals()
@@ -83,6 +88,119 @@ class HealthAiAgentTest extends TestCase
         $this->assertStringContainsString('solapa', $res2['message']);
     }
 
+    public function test_schedule_appointment_allows_parallel_appointments_with_different_doctors()
+    {
+        $business = BusinessContext::get();
+        $docA = Doctor::create(['business_id' => $business->id, 'name' => 'Dr. Alpha', 'is_active' => true]);
+        $docB = Doctor::create(['business_id' => $business->id, 'name' => 'Dr. Beta', 'is_active' => true]);
+
+        $contact = Contact::create(['phone_number' => '593999888777', 'name' => 'Carlos Andrade']);
+        $service = new HealthSkillsService;
+        $tools = $service->getTools($contact);
+        $scheduleTool = collect($tools)->firstWhere(fn ($t) => $t->name() === 'schedule_appointment');
+
+        $tz = 'America/Guayaquil';
+        $today = Carbon::tomorrow($tz)->format('Y-m-d');
+
+        // Agendar con Dr. Alpha a las 10:00
+        $res1Json = $scheduleTool->handle("{$today} 10:00", 'Consulta Alpha', 'Dr. Alpha');
+        $this->assertEquals('success', json_decode($res1Json, true)['status']);
+
+        // Agendar con Dr. Beta a las 10:00 (mismo horario, distinto doctor) -> debe permitirse
+        $res2Json = $scheduleTool->handle("{$today} 10:00", 'Consulta Beta', 'Dr. Beta');
+        $this->assertEquals('success', json_decode($res2Json, true)['status']);
+    }
+
+    public function test_schedule_appointment_rejects_unknown_doctor_name()
+    {
+        $contact = Contact::create(['phone_number' => '593999888777', 'name' => 'Roberto Solis']);
+        $service = new HealthSkillsService;
+        $scheduleTool = collect($service->getTools($contact))->firstWhere(fn ($t) => $t->name() === 'schedule_appointment');
+
+        $tz = 'America/Guayaquil';
+        $today = Carbon::tomorrow($tz)->format('Y-m-d');
+
+        $resJson = $scheduleTool->handle("{$today} 11:00", 'Consulta General', 'Dr. Inexistente Fantasma');
+        $res = json_decode($resJson, true);
+
+        $this->assertEquals('error', $res['status']);
+        $this->assertStringContainsString('No se encontró al especialista', $res['message']);
+    }
+
+    public function test_schedule_appointment_rejects_past_datetime()
+    {
+        $contact = Contact::create(['phone_number' => '593999888777', 'name' => 'Lucia Paz']);
+        $service = new HealthSkillsService;
+        $scheduleTool = collect($service->getTools($contact))->firstWhere(fn ($t) => $t->name() === 'schedule_appointment');
+
+        $pastDate = Carbon::now('America/Guayaquil')->subDay()->format('Y-m-d H:i');
+        $resJson = $scheduleTool->handle($pastDate, 'Consulta Pasada');
+        $res = json_decode($resJson, true);
+
+        $this->assertEquals('error', $res['status']);
+        $this->assertStringContainsString('pasadas', $res['message']);
+    }
+
+    public function test_schedule_appointment_rejects_outside_business_hours()
+    {
+        $contact = Contact::create(['phone_number' => '593999888777', 'name' => 'Diego Rivas']);
+        $service = new HealthSkillsService;
+        $scheduleTool = collect($service->getTools($contact))->firstWhere(fn ($t) => $t->name() === 'schedule_appointment');
+
+        $tz = 'America/Guayaquil';
+        $today = Carbon::tomorrow($tz)->format('Y-m-d');
+
+        // Intentar agendar a las 03:00 (fuera de horario comercial 09:00 - 18:00)
+        $resJson = $scheduleTool->handle("{$today} 03:00", 'Consulta Nocturna');
+        $res = json_decode($resJson, true);
+
+        $this->assertEquals('error', $res['status']);
+        $this->assertStringContainsString('fuera de nuestro horario', $res['message']);
+    }
+
+    public function test_outgoing_whatsapp_service_uses_tenant_credentials()
+    {
+        Http::fake([
+            'graph.facebook.com/*' => Http::response(['messaging_product' => 'whatsapp'], 200),
+        ]);
+
+        $tenantBusiness = Business::create([
+            'name' => 'Consultorio Beta',
+            'slug' => 'consultorio-beta',
+            'vertical' => 'health',
+            'whatsapp_phone_number_id' => 'phone_id_tenant_beta_999',
+            'settings' => ['whatsapp_access_token' => 'token_tenant_beta_xyz'],
+        ]);
+
+        BusinessContext::set($tenantBusiness);
+
+        $ws = new WhatsAppService;
+        $ws->sendText('5939911122233', 'Hola desde Tenant Beta');
+
+        Http::assertSent(function ($request) {
+            return str_contains($request->url(), '/v20.0/phone_id_tenant_beta_999/messages')
+                && $request->hasHeader('Authorization', 'Bearer token_tenant_beta_xyz');
+        });
+    }
+
+    public function test_google_calendar_service_parses_json_credentials()
+    {
+        config([
+            'services.google.service_account_json' => json_encode([
+                'client_email' => 'test-sa@project.iam.gserviceaccount.com',
+                'private_key' => '-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC...\n-----END PRIVATE KEY-----\n',
+            ]),
+        ]);
+
+        $gcs = new GoogleCalendarService;
+        $ref = new \ReflectionClass($gcs);
+        $prop = $ref->getProperty('serviceAccount');
+        $prop->setAccessible(true);
+        $sa = $prop->getValue($gcs);
+
+        $this->assertEquals('test-sa@project.iam.gserviceaccount.com', $sa['client_email']);
+    }
+
     public function test_webhook_dispatches_async_job_immediately()
     {
         Queue::fake();
@@ -114,26 +232,45 @@ class HealthAiAgentTest extends TestCase
         Queue::assertPushed(ProcessWhatsAppWebhookJob::class);
     }
 
-    public function test_cancel_appointment_tool_frees_the_slot()
+    public function test_cancel_appointment_tool_frees_slot_and_deletes_google_calendar_event()
     {
-        $contact = Contact::create(['phone_number' => '593999888777', 'name' => 'Luis Vera']);
-        $service = new HealthSkillsService;
-        $tools = $service->getTools($contact);
-        $scheduleTool = collect($tools)->firstWhere(fn ($t) => $t->name() === 'schedule_appointment');
-        $cancelTool = collect($tools)->firstWhere(fn ($t) => $t->name() === 'cancel_appointment');
+        config([
+            'services.google.service_account' => [
+                'client_email' => 'test-sa@project.iam.gserviceaccount.com',
+                'private_key' => '-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC...\n-----END PRIVATE KEY-----\n',
+            ],
+        ]);
 
+        Http::fake([
+            'oauth2.googleapis.com/token' => Http::response(['access_token' => 'mock_token'], 200),
+            'www.googleapis.com/calendar/v3/calendars/*/events/*' => Http::response([], 204),
+        ]);
+
+        $contact = Contact::create(['phone_number' => '593999888777', 'name' => 'Luis Vera']);
         $tz = 'America/Guayaquil';
         $day = Carbon::tomorrow($tz)->format('Y-m-d');
 
-        // Agendar y luego cancelar (única cita, sin pasar datetime)
-        $scheduleTool->handle("{$day} 11:00", 'Consulta General');
+        $app = Appointment::create([
+            'contact_id' => $contact->id,
+            'title' => 'Consulta Odontológica',
+            'start_time' => Carbon::parse("{$day} 11:00:00", $tz),
+            'end_time' => Carbon::parse("{$day} 11:45:00", $tz),
+            'status' => 'scheduled',
+            'google_event_id' => 'gcal_event_12345',
+        ]);
+
+        $service = new HealthSkillsService;
+        $cancelTool = collect($service->getTools($contact))->firstWhere(fn ($t) => $t->name() === 'cancel_appointment');
+
         $cancelJson = $cancelTool->handle(null);
         $cancel = json_decode($cancelJson, true);
-        $this->assertEquals('success', $cancel['status']);
 
-        // El horario queda libre: se puede volver a agendar sin solaparse
-        $reJson = $scheduleTool->handle("{$day} 11:00", 'Otra Consulta');
-        $this->assertEquals('success', json_decode($reJson, true)['status']);
+        $this->assertEquals('success', $cancel['status']);
+        $this->assertEquals('cancelled', $app->fresh()->status);
+
+        Http::assertSent(function ($request) {
+            return $request->method() === 'DELETE' && str_contains($request->url(), 'gcal_event_12345');
+        });
     }
 
     public function test_reschedule_appointment_tool_moves_the_slot()
@@ -187,7 +324,6 @@ class HealthAiAgentTest extends TestCase
 
     public function test_duplicate_wa_id_is_not_processed_twice()
     {
-        // Simula que Meta ya entregó y procesamos este mensaje (mismo wa_id).
         $contact = Contact::create(['phone_number' => '593999000111', 'name' => 'Ana Torres']);
         Message::create([
             'contact_id' => $contact->id,
@@ -198,7 +334,6 @@ class HealthAiAgentTest extends TestCase
 
         $service = app(UaldoManagerService::class);
 
-        // Reintento de Meta con el mismo wa_id: debe ignorarse sin llamar a la IA ni duplicar.
         $reply = $service->processIncomingMessage('593999000111', 'Hola, quiero una cita', 'whatsapp', 'wamid.DUPLICATE');
 
         $this->assertSame('', $reply);
@@ -211,7 +346,6 @@ class HealthAiAgentTest extends TestCase
 
         $payload = json_encode(['object' => 'whatsapp_business_account']);
 
-        // Peticion sin firma valida -> 401 Unauthorized
         $response = $this->call('POST', '/api/whatsapp/webhook', [], [], [], [
             'HTTP_X-Hub-Signature-256' => 'sha256=invalid_signature',
             'CONTENT_TYPE' => 'application/json',
@@ -219,7 +353,6 @@ class HealthAiAgentTest extends TestCase
 
         $response->assertStatus(401);
 
-        // Peticion con firma HMAC SHA256 correcta -> 200 OK
         $validHash = hash_hmac('sha256', $payload, 'super_secret_key');
         $responseValid = $this->call('POST', '/api/whatsapp/webhook', [], [], [], [
             'HTTP_X-Hub-Signature-256' => "sha256={$validHash}",

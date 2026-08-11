@@ -3,7 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Jobs\ProcessWhatsAppWebhookJob;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Log;
 
 class WhatsAppController extends Controller
@@ -11,9 +13,14 @@ class WhatsAppController extends Controller
     /**
      * Webhook verification for WhatsApp Meta Cloud API.
      */
-    public function verifyWebhook(Request $request)
+    public function verifyWebhook(Request $request): Response|JsonResponse
     {
-        $verifyToken = config('services.whatsapp.verify_token', 'ualdo_business_token');
+        $verifyToken = (string) config('services.whatsapp.verify_token', '');
+        if (empty($verifyToken)) {
+            Log::error('El token de verificación de WhatsApp (WHATSAPP_VERIFY_TOKEN) no está configurado.');
+
+            return response()->json(['error' => 'Verify token not configured'], 403);
+        }
 
         $mode = $request->query('hub_mode');
         $token = $request->query('hub_verify_token');
@@ -22,8 +29,10 @@ class WhatsAppController extends Controller
         if ($mode && $token) {
             if ($mode === 'subscribe' && $token === $verifyToken) {
                 Log::info('WhatsApp Webhook Verified');
+
                 return response($challenge, 200);
             }
+
             return response()->json(['error' => 'Forbidden'], 403);
         }
 
@@ -33,15 +42,16 @@ class WhatsAppController extends Controller
     /**
      * Handle incoming WhatsApp webhook messages (Asynchronous Queue Dispatch + Signature Check).
      */
-    public function handleWebhook(Request $request)
+    public function handleWebhook(Request $request): Response|JsonResponse
     {
-        $appSecret = config('services.whatsapp.app_secret');
+        $appSecret = (string) config('services.whatsapp.app_secret', '');
 
-        // Validar firma HMAC SHA256 si la appSecret está configurada
-        if (!empty($appSecret)) {
+        // Validar firma HMAC SHA256 si la appSecret está configurada o en producción
+        if (! empty($appSecret) || app()->isProduction()) {
             $signatureHeader = $request->header('X-Hub-Signature-256');
-            if (!$signatureHeader || !$this->isValidSignature($request->getContent(), $signatureHeader, $appSecret)) {
+            if (! $signatureHeader || empty($appSecret) || ! $this->isValidSignature($request->getContent(), $signatureHeader, $appSecret)) {
                 Log::warning('Firma X-Hub-Signature-256 de WhatsApp inválida o no provista.');
+
                 return response()->json(['error' => 'Invalid signature'], 401);
             }
         }

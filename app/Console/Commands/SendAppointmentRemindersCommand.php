@@ -3,9 +3,12 @@
 namespace App\Console\Commands;
 
 use App\Models\Appointment;
+use App\Models\Business;
+use App\Services\BusinessContext;
 use App\Services\WhatsAppService;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Log;
 
 class SendAppointmentRemindersCommand extends Command
@@ -27,16 +30,17 @@ class SendAppointmentRemindersCommand extends Command
     /**
      * Execute the console command.
      */
-    public function handle(WhatsAppService $whatsapp)
+    public function handle(WhatsAppService $whatsapp): int
     {
-        $businesses = \App\Services\BusinessContext::runAsCentral(fn () => \App\Models\Business::all());
+        /** @var Collection<int, Business> $businesses */
+        $businesses = BusinessContext::runAsCentral(fn () => Business::all());
 
         foreach ($businesses as $business) {
-            $tz = $business->timezone ?? config('app.timezone', 'America/Guayaquil');
+            $tz = $business->timezone ?? (string) config('app.timezone', 'America/Guayaquil');
             $tomorrowStart = Carbon::tomorrow($tz)->startOfDay();
             $tomorrowEnd = Carbon::tomorrow($tz)->endOfDay();
 
-            \App\Services\BusinessContext::runInContext($business, function () use ($business, $tomorrowStart, $tomorrowEnd, $tz, $whatsapp) {
+            BusinessContext::runInContext($business, function () use ($business, $tomorrowStart, $tomorrowEnd, $tz, $whatsapp) {
                 $appointments = Appointment::whereBetween('start_time', [$tomorrowStart, $tomorrowEnd])
                     ->where('status', 'scheduled')
                     ->whereNull('reminder_sent_at')
@@ -53,11 +57,13 @@ class SendAppointmentRemindersCommand extends Command
                         }
 
                         $formattedTime = Carbon::parse($appointment->start_time)->timezone($tz)->format('H:i');
-                        $message = "Hola {$contact->name}, te recordamos tu cita de mañana a las {$formattedTime} en {$business->name}. Motivo: {$appointment->title}. Si deseas cancelar o reprogramar, por favor responde a este mensaje.";
+                        $contactName = $contact->name ?? 'Cliente';
+                        $businessName = $business->name ?? 'Consultorio';
+                        $message = "Hola {$contactName}, te recordamos tu cita de mañana a las {$formattedTime} en {$businessName}. Motivo: {$appointment->title}. Si deseas cancelar o reprogramar, por favor responde a este mensaje.";
 
                         $whatsapp->sendText($contact->phone_number, $message);
                         $appointment->update(['reminder_sent_at' => Carbon::now($tz)]);
-                        Log::info("Recordatorio enviado a {$contact->phone_number} para cita #{$appointment->id} [{$business->name}]");
+                        Log::info("Recordatorio enviado a {$contact->phone_number} para cita #{$appointment->id} [{$businessName}]");
                     }
                 }
             });

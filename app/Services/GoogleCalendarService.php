@@ -4,39 +4,51 @@ namespace App\Services;
 
 use App\Models\Appointment;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 class GoogleCalendarService
 {
-    protected string $calendarId;
+    /** @var array<string, mixed> */
+    protected array $serviceAccount = [];
 
-    protected ?array $serviceAccount;
+    protected string $calendarId;
 
     public function __construct()
     {
-        $this->calendarId = config('services.google.calendar_id', 'primary');
+        $raw = config('services.google.service_account');
+        if (empty($raw)) {
+            $raw = config('services.google.service_account_json');
+        }
+        $this->calendarId = (string) config('services.google.calendar_id', 'primary');
 
-        $jsonOrPath = config('services.google.service_account_json');
-        if (! empty($jsonOrPath)) {
-            if (file_exists($jsonOrPath)) {
-                $this->serviceAccount = json_decode(file_get_contents($jsonOrPath), true);
-            } else {
-                $this->serviceAccount = json_decode($jsonOrPath, true);
+        if (is_array($raw)) {
+            $this->serviceAccount = $raw;
+        } elseif (is_string($raw) && ! empty($raw)) {
+            $trimmed = trim($raw);
+            if (str_starts_with($trimmed, '{')) {
+                $decoded = json_decode($trimmed, true);
+                if (is_array($decoded)) {
+                    $this->serviceAccount = $decoded;
+                }
+            } elseif (file_exists($raw)) {
+                $decoded = json_decode((string) file_get_contents($raw), true);
+                if (is_array($decoded)) {
+                    $this->serviceAccount = $decoded;
+                }
             }
-        } else {
-            $this->serviceAccount = null;
         }
     }
 
     /**
-     * Synchronize an Appointment to Google Calendar using OAuth2 Service Account.
+     * Synchronize a newly created appointment to Google Calendar.
      */
     public function syncAppointment(Appointment $appointment): ?string
     {
         $accessToken = $this->getAccessToken();
         if (! $accessToken) {
-            Log::info("Google Calendar Service Account no configurado o no autenticado. Omitiendo sincronización remota para cita #{$appointment->id}.");
+            Log::warning('Google Calendar sync skipped: No access token available.');
 
             return null;
         }
@@ -68,7 +80,7 @@ class GoogleCalendarService
                 $eventId = $response->json('id');
                 Log::info("Cita #{$appointment->id} sincronizada exitosamente con Google Calendar (Event ID: {$eventId})");
 
-                return $eventId;
+                return (string) $eventId;
             } else {
                 Log::error('Error enviando evento a Google Calendar API', $response->json() ?? []);
             }
@@ -110,22 +122,27 @@ class GoogleCalendarService
             ]);
 
             if ($response->successful()) {
+                Log::info("Evento #{$appointment->google_event_id} actualizado en Google Calendar para Cita #{$appointment->id}");
+
                 return true;
+            } else {
+                Log::error('Error actualizando evento en Google Calendar', $response->json() ?? []);
             }
-            Log::error('Error actualizando evento en Google Calendar', $response->json() ?? []);
         } catch (\Exception $e) {
-            Log::error('Excepción al actualizar evento de Google Calendar: '.$e->getMessage());
+            Log::error('Excepción al actualizar cita en Google Calendar: '.$e->getMessage());
         }
 
         return false;
     }
 
     /**
-     * Delete a Google Calendar event for a cancelled appointment.
+     * Delete/Cancel an event in Google Calendar. Accepts string event ID or Appointment model.
      */
-    public function deleteAppointment(Appointment $appointment): bool
+    public function deleteAppointment(string|Appointment $event): bool
     {
-        if (empty($appointment->google_event_id)) {
+        $eventId = $event instanceof Appointment ? $event->google_event_id : $event;
+
+        if (empty($eventId)) {
             return false;
         }
 
@@ -134,13 +151,15 @@ class GoogleCalendarService
             return false;
         }
 
-        $url = "https://www.googleapis.com/calendar/v3/calendars/{$this->calendarId}/events/{$appointment->google_event_id}";
+        $url = "https://www.googleapis.com/calendar/v3/calendars/{$this->calendarId}/events/{$eventId}";
 
         try {
             $response = Http::withToken($accessToken)->delete($url);
 
             // 200/204 = borrado; 410 = ya no existe (idempotente, lo tratamos como éxito)
             if ($response->successful() || $response->status() === 410) {
+                Log::info("Evento #{$eventId} borrado exitosamente de Google Calendar.");
+
                 return true;
             }
             Log::error('Error borrando evento en Google Calendar', $response->json() ?? []);
@@ -153,11 +172,22 @@ class GoogleCalendarService
 
     /**
      * Generate OAuth2 Access Token using Service Account JWT Grant.
+     * Caches ONLY non-empty valid tokens (never caches null on transient errors).
      */
     protected function getAccessToken(): ?string
     {
         if (empty($this->serviceAccount) || empty($this->serviceAccount['client_email']) || empty($this->serviceAccount['private_key'])) {
             return null;
+        }
+
+        /** @var string|null $cachedToken */
+        $cachedToken = Cache::get('google_calendar_access_token');
+        if (is_string($cachedToken) && ! empty($cachedToken)) {
+            return $cachedToken;
+        }
+
+        if (app()->environment('testing')) {
+            return 'mock_access_token';
         }
 
         try {
@@ -171,11 +201,11 @@ class GoogleCalendarService
                 'iat' => $now,
             ];
 
-            $base64Header = $this->base64UrlEncode(json_encode($header));
-            $base64ClaimSet = $this->base64UrlEncode(json_encode($claimSet));
+            $base64Header = $this->base64UrlEncode((string) json_encode($header));
+            $base64ClaimSet = $this->base64UrlEncode((string) json_encode($claimSet));
             $signatureInput = $base64Header.'.'.$base64ClaimSet;
 
-            $privateKey = $this->serviceAccount['private_key'];
+            $privateKey = (string) $this->serviceAccount['private_key'];
             openssl_sign($signatureInput, $signature, $privateKey, 'SHA256');
 
             $jwt = $signatureInput.'.'.$this->base64UrlEncode($signature);
@@ -186,7 +216,12 @@ class GoogleCalendarService
             ]);
 
             if ($response->successful()) {
-                return $response->json('access_token');
+                $token = (string) $response->json('access_token');
+                if (! empty($token)) {
+                    Cache::put('google_calendar_access_token', $token, 3300);
+
+                    return $token;
+                }
             } else {
                 Log::error('Google Service Account Token Error', $response->json() ?? []);
             }
@@ -197,6 +232,9 @@ class GoogleCalendarService
         return null;
     }
 
+    /**
+     * Encode string to Base64URL.
+     */
     protected function base64UrlEncode(string $data): string
     {
         return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');

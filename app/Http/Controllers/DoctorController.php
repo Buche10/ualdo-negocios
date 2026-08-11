@@ -3,12 +3,14 @@
 namespace App\Http\Controllers;
 
 use App\Models\Doctor;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
+use Inertia\Response;
 
 class DoctorController extends Controller
 {
-    public function index()
+    public function index(): Response
     {
         $doctors = Doctor::withCount('appointments')->orderBy('name')->get();
 
@@ -17,7 +19,7 @@ class DoctorController extends Controller
         ]);
     }
 
-    public function store(Request $request)
+    public function store(Request $request): RedirectResponse
     {
         $validated = $request->validate([
             'name' => 'required|string|max:255',
@@ -32,7 +34,7 @@ class DoctorController extends Controller
         return redirect()->back()->with('message', 'Doctor creado exitosamente');
     }
 
-    public function destroy(Doctor $doctor)
+    public function destroy(Doctor $doctor): RedirectResponse
     {
         $doctor->delete();
 

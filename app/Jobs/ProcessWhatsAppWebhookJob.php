@@ -39,6 +39,8 @@ class ProcessWhatsAppWebhookJob implements ShouldQueue
 
     /**
      * Create a new job instance.
+     *
+     * @param  array<string, mixed>  $payload
      */
     public function __construct(protected array $payload)
     {
@@ -55,8 +57,12 @@ class ProcessWhatsAppWebhookJob implements ShouldQueue
         }
 
         foreach ($this->payload['entry'] as $entry) {
+            if (! isset($entry['changes']) || ! is_array($entry['changes'])) {
+                continue;
+            }
+
             foreach ($entry['changes'] as $change) {
-                if (isset($change['value']['messages'])) {
+                if (isset($change['value']['messages']) && is_array($change['value']['messages'])) {
                     $metadata = $change['value']['metadata'] ?? [];
                     $phoneNumberId = $metadata['phone_number_id'] ?? null;
 
@@ -69,26 +75,27 @@ class ProcessWhatsAppWebhookJob implements ShouldQueue
                         $business = Business::first();
                     }
 
-                    $messageData = $change['value']['messages'][0];
                     $contactsData = $change['value']['contacts'][0] ?? [];
-
-                    $senderPhone = $messageData['from'] ?? null;
-                    $waId = $messageData['id'] ?? null;
-                    $messageText = $messageData['text']['body'] ?? '';
                     $profileName = $contactsData['profile']['name'] ?? null;
 
-                    if (! empty($senderPhone) && ! empty($messageText)) {
-                        Log::info("ProcessWhatsAppWebhookJob procesando mensaje de {$senderPhone} ({$profileName}) para negocio '{$business?->name}' [ID: {$business?->id}]: {$messageText}");
+                    foreach ($change['value']['messages'] as $messageData) {
+                        $senderPhone = $messageData['from'] ?? null;
+                        $waId = $messageData['id'] ?? null;
+                        $messageText = $messageData['text']['body'] ?? '';
 
-                        // Procesar con IA + Tools en el contexto de negocio resuelto
-                        BusinessContext::runInContext($business, function () use ($ualdoService, $whatsapp, $senderPhone, $messageText, $waId, $profileName) {
-                            $reply = $ualdoService->processIncomingMessage($senderPhone, $messageText, 'whatsapp', $waId, $profileName);
+                        if (! empty($senderPhone) && ! empty($messageText)) {
+                            Log::info("ProcessWhatsAppWebhookJob procesando mensaje de {$senderPhone} ({$profileName}) para negocio '{$business?->name}' [ID: {$business?->id}]: {$messageText}");
 
-                            // Enviar respuesta por WhatsApp
-                            if (! empty($reply)) {
-                                $whatsapp->sendText($senderPhone, $reply);
-                            }
-                        });
+                            // Procesar con IA + Tools en el contexto de negocio resuelto
+                            BusinessContext::runInContext($business, function () use ($ualdoService, $whatsapp, $senderPhone, $messageText, $waId, $profileName) {
+                                $reply = $ualdoService->processIncomingMessage($senderPhone, $messageText, 'whatsapp', $waId, $profileName);
+
+                                // Enviar respuesta por WhatsApp
+                                if (! empty($reply)) {
+                                    $whatsapp->sendText($senderPhone, $reply);
+                                }
+                            });
+                        }
                     }
                 }
             }

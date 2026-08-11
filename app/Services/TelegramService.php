@@ -4,6 +4,9 @@ namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use SergiX44\Nutgram\Nutgram;
+use SergiX44\Nutgram\Telegram\Types\Keyboard\InlineKeyboardButton;
+use SergiX44\Nutgram\Telegram\Types\Keyboard\InlineKeyboardMarkup;
 
 class TelegramService
 {
@@ -18,7 +21,25 @@ class TelegramService
     }
 
     /**
-     * Send a plain notification to the configured staff chat/group.
+     * Get a configured Nutgram instance.
+     */
+    public function getBot(): ?Nutgram
+    {
+        if (empty($this->botToken)) {
+            return null;
+        }
+
+        try {
+            return new Nutgram($this->botToken);
+        } catch (\Throwable $e) {
+            Log::error('Error instanciando Nutgram: '.$e->getMessage());
+
+            return null;
+        }
+    }
+
+    /**
+     * Send a plain notification to the configured staff chat/group using Nutgram/HTTP.
      */
     public function notifyStaff(string $text, ?string $overrideChatId = null): bool
     {
@@ -40,15 +61,45 @@ class TelegramService
                 'disable_web_page_preview' => true,
             ]);
 
-            if ($response->successful()) {
-                return true;
-            }
+            return $response->successful();
+        } catch (\Throwable $e) {
+            Log::error('Error enviando notificación a Telegram: '.$e->getMessage());
 
-            Log::error('Error enviando notificación a Telegram', $response->json() ?? []);
-        } catch (\Exception $e) {
-            Log::error('Excepción en TelegramService: '.$e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Send an ApprovalGate confirmation prompt with Inline Keyboard (Confirmar/Cancelar) buttons using Nutgram markup.
+     */
+    public function sendApprovalPrompt(string $chatId, string $actionDescription, string $token): bool
+    {
+        if (empty($this->botToken) || empty($chatId)) {
+            return false;
         }
 
-        return false;
+        $keyboard = InlineKeyboardMarkup::make()
+            ->addRow(
+                InlineKeyboardButton::make('✅ Confirmar', callback_data: "approve:{$token}"),
+                InlineKeyboardButton::make('❌ Cancelar', callback_data: "cancel:{$token}")
+            );
+
+        $text = "⚠️ <b>APROBACIÓN REQUERIDA</b>\n\n{$actionDescription}\n\n<i>Presiona un botón para confirmar o cancelar la acción:</i>";
+        $url = "https://api.telegram.org/bot{$this->botToken}/sendMessage";
+
+        try {
+            $response = Http::post($url, [
+                'chat_id' => $chatId,
+                'text' => $text,
+                'parse_mode' => 'HTML',
+                'reply_markup' => json_decode(json_encode($keyboard), true),
+            ]);
+
+            return $response->successful();
+        } catch (\Throwable $e) {
+            Log::error('Error enviando prompt de aprobación vía Telegram: '.$e->getMessage());
+
+            return false;
+        }
     }
 }

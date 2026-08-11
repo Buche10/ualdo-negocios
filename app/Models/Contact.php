@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Contact extends Model
 {
-    use HasFactory, BelongsToBusiness;
+    use BelongsToBusiness, HasFactory;
 
     protected $fillable = [
         'business_id',
@@ -24,6 +24,21 @@ class Contact extends Model
         'bot_paused_until' => 'datetime',
         'metadata' => 'array',
     ];
+
+    public function setPhoneNumberAttribute(?string $value): void
+    {
+        if (empty($value)) {
+            $this->attributes['phone_number'] = $value;
+
+            return;
+        }
+
+        try {
+            $this->attributes['phone_number'] = phone($value, 'INTERNATIONAL')->formatE164();
+        } catch (\Throwable $e) {
+            $this->attributes['phone_number'] = $value;
+        }
+    }
 
     public function messages(): HasMany
     {

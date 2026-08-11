@@ -3,15 +3,17 @@
 namespace App\Http\Controllers;
 
 use App\Models\InventoryItem;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
+use Inertia\Response;
 
 class InventoryItemController extends Controller
 {
     /**
      * Display a listing of the inventory items.
      */
-    public function index()
+    public function index(): Response
     {
         $items = InventoryItem::with('requiredSupplies')->orderBy('created_at', 'desc')->get();
         $lowStockItems = $items->filter(fn ($item) => $item->isLowStock())->values();
@@ -25,7 +27,7 @@ class InventoryItemController extends Controller
     /**
      * Show the form for creating a new resource.
      */
-    public function create()
+    public function create(): Response
     {
         $supplies = InventoryItem::supplies()->get(['id', 'name', 'stock', 'type']);
 
@@ -37,7 +39,7 @@ class InventoryItemController extends Controller
     /**
      * Store a newly created resource in storage.
      */
-    public function store(Request $request)
+    public function store(Request $request): RedirectResponse
     {
         $validated = $request->validate([
             'name' => 'required|string|max:255',
@@ -62,7 +64,7 @@ class InventoryItemController extends Controller
             'attributes' => $validated['attributes'] ?? null,
         ]);
 
-        if (!empty($validated['supplies']) && $validated['type'] === 'service') {
+        if (! empty($validated['supplies']) && $validated['type'] === 'service') {
             $syncData = [];
             foreach ($validated['supplies'] as $sup) {
                 $syncData[$sup['id']] = ['quantity_required' => $sup['quantity']];
@@ -76,7 +78,7 @@ class InventoryItemController extends Controller
     /**
      * Remove the specified resource from storage.
      */
-    public function destroy(InventoryItem $inventory)
+    public function destroy(InventoryItem $inventory): RedirectResponse
     {
         $inventory->delete();
 

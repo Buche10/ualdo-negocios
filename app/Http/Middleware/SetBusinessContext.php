@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Models\Business;
 use App\Services\BusinessContext;
 use Closure;
 use Illuminate\Http\Request;
@@ -18,7 +19,9 @@ class SetBusinessContext
         $user = $request->user();
 
         if ($user && $user->business_id) {
-            BusinessContext::set($user->business);
+            /** @var Business|null $business */
+            $business = $user->business;
+            BusinessContext::set($business);
         }
 
         try {

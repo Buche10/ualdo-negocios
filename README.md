@@ -1,31 +1,26 @@
-# UaldoBusiness — Recepcionista AI para Consultorios de Salud (MVP)
+# UaldoBusiness — Plataforma Multi-Vertical Genérica (AI Receptionist & Operations)
 
-Motor de atención automatizada por WhatsApp para consultorios médicos, odontológicos y centros de estética.
+Motor de atención automatizada por WhatsApp/Telegram y gestión operativa multi-tenant para consultorios médicos, restaurantes, tiendas de retail y negocios de servicios.
 
-## 🎯 Alcance Congelado (Single Job MVP)
-> **Un solo trabajo:** Atender clientes por WhatsApp, responder sobre servicios/tarifas del consultorio, verificar disponibilidad y agendar/cancelar citas sin doble reserva.
-
-### 🚫 Fuera de Alcance del MVP (Aparcado en rama):
-- E-commerce / Creación de órdenes de compra (`Order`, `OrderItem`).
-- Campañas de marketing masivo (`Campaign`).
-- Multi-verticales adicionales (Restaurantes, Retail, etc.).
+## 🎯 Plataforma Multi-Vertical Genérica
+> Arquitectura agnóstica basada en **SkillProviders por vertical** (Salud, Restaurantes, Retail, Servicios General), con **recursos genéricos (`Resource`)**, **ledger inmutable de inventario (`InventoryTransaction`)**, **ciclo de vida de pedidos (`Order`, `OrderItem`)** y **pasarela de pagos online y presenciales (`Payment`, PayPhone/Fake)**.
 
 ---
 
 ## 🛠️ Stack Tecnológico
-- **Chasis**: Laravel 12 + Breeze + Inertia JS (Vue 3).
-- **Orquestación IA**: `echolabsdev/prism` (^0.100.1) con Tool-Calling (DeepSeek / OpenAI).
-- **Base de Datos**: PostgreSQL / SQLite (Contact, Appointment, InventoryItem, AiSkill).
-- **Integraciones**: Meta WhatsApp Cloud API v20.0 + Google Calendar Sync.
+- **Chasis**: Laravel 12 + Breeze + Inertia JS (React).
+- **Orquestación IA**: `echolabsdev/prism` con Tool-Calling (DeepSeek / OpenAI) y arquitectura 3-Layer System Prompt.
+- **Base de Datos**: PostgreSQL / SQLite (Multi-tenant fail-closed por `BusinessContext`).
+- **Integraciones**: Meta WhatsApp Cloud API + Telegram Bot API + PayPhone Payment Gateway + Google Calendar Sync.
 
 ---
 
-## 🚦 Fases de Desarrollo
-- [x] **Fase 0**: Baseline y Control de Alcance (Git setup & manifest).
-- [x] **Fase 1**: Trasplante de Cerebro (Identidad Contact, Threading y Tool-calling Prism).
-- [x] **Fase 2**: Core Tools (Disponibilidad, Agendar/Reprogramar/Cancelar anti-doble-reserva, Servicios, Handoff).
-- [x] **Fase 3**: Flujo WhatsApp End-to-End (webhook asíncrono + firma HMAC + idempotencia).
-- [x] **Fase 4**: Verticalización Salud (Google Calendar Sync, Recordatorios Anti-No Show idempotentes y LOPDP).
+## 🚦 Fases de Desarrollo Multi-Vertical
+- [x] **Fase 0**: Registro de Skills por Vertical (`SkillRegistry`, `HealthSkillProvider`, `GenericSkillProvider`).
+- [x] **Fase 1**: Inventario Operativo (Ledger inmutable `InventoryTransaction`, `InventoryService` con `lockForUpdate`).
+- [x] **Fase 2**: Pedidos + Pagos (`Order`, `OrderItem`, `Payment`, `PaymentGateway`, `/pay/{payment}` y webhooks idempotentes).
+- [x] **Fase 3**: Recurso Genérico + Vertical Restaurante (`Resource`, anti-solape por recurso, `RestaurantSkillProvider`).
+- [x] **Fase 4**: Onboarding, Seeding & Dashboard por Vertical (`VerticalSeeder`, Admin AI tools de lectura de pedidos y Kardex).
 
 ---
 

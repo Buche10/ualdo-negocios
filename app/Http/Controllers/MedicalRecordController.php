@@ -3,13 +3,14 @@
 namespace App\Http\Controllers;
 
 use App\Models\Contact;
-use App\Models\MedicalRecord;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
+use Inertia\Response;
 
 class MedicalRecordController extends Controller
 {
-    public function index(Contact $contact)
+    public function index(Contact $contact): Response
     {
         $records = $contact->medicalRecords()->with('doctor')->orderBy('created_at', 'desc')->get();
 
@@ -19,7 +20,7 @@ class MedicalRecordController extends Controller
         ]);
     }
 
-    public function store(Request $request, Contact $contact)
+    public function store(Request $request, Contact $contact): RedirectResponse
     {
         $validated = $request->validate([
             'appointment_id' => 'nullable|exists:appointments,id',

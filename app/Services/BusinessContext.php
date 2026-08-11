@@ -62,9 +62,17 @@ class BusinessContext
     }
 
     /**
+     * Alias for clear() to forget current business context.
+     */
+    public static function forget(): void
+    {
+        static::clear();
+    }
+
+    /**
      * Run a callback within the context of a given Business and restore previous context.
      */
-    public static function runInContext(?Business $business, Closure $callback)
+    public static function runInContext(?Business $business, Closure $callback): mixed
     {
         $previousBusiness = static::$currentBusiness;
         $previousCentral = static::$isCentralMode;
@@ -83,7 +91,7 @@ class BusinessContext
     /**
      * Run a callback in central/admin mode (disables tenant isolation for system tasks).
      */
-    public static function runAsCentral(Closure $callback)
+    public static function runAsCentral(Closure $callback): mixed
     {
         $previousBusiness = static::$currentBusiness;
         $previousCentral = static::$isCentralMode;
