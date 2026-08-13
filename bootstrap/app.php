@@ -16,6 +16,10 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Detrás del proxy de Coolify (Traefik) que termina el SSL: confiar en
+        // X-Forwarded-* para que Laravel genere URLs https (assets, rutas, redirects).
+        $middleware->trustProxies(at: '*');
+
         $middleware->web(append: [
             HandleInertiaRequests::class,
             SetBusinessContext::class,
